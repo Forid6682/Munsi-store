@@ -1,0 +1,1797 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  Search,
+  Plus,
+  Minus,
+  Trash2,
+  AlertTriangle,
+  ShoppingBag,
+  Store,
+  CreditCard,
+  Banknote,
+  CheckCircle2,
+  Tag,
+  Phone,
+  Layers,
+  FileCheck,
+  Package,
+  X,
+  Send,
+  RotateCcw,
+  Maximize2,
+  Edit3,
+} from 'lucide-react';
+import { Product, Shop, OrderItem, PaymentMethod, Route, Order, ReturnedOrderItem } from '../types';
+import { AddShopModal } from './AddShopModal';
+import { getBusinessInfo } from '../lib/storage';
+import { ProductImageLightboxModal } from './ProductImageLightboxModal';
+
+interface OrderBookingViewProps {
+  products: Product[];
+  shops: Shop[];
+  routes?: Route[];
+  orders?: Order[];
+  onOrderCreated: (order: any) => void;
+  onAddShop: (shop: Shop) => void;
+  selectedShopIdProp?: string;
+  onCartCountChange?: (count: number) => void;
+  editingOrder?: Order | null;
+  onCancelEditOrder?: () => void;
+  onUpdateOrder?: (order: Order) => void;
+}
+
+export const OrderBookingView: React.FC<OrderBookingViewProps> = ({
+  products,
+  shops,
+  routes = [],
+  orders = [],
+  onOrderCreated,
+  onAddShop,
+  selectedShopIdProp,
+  onCartCountChange,
+  editingOrder = null,
+  onCancelEditOrder,
+  onUpdateOrder,
+}) => {
+  // Selected shop
+  const [selectedShopId, setSelectedShopId] = useState<string>(
+    editingOrder?.shopId || selectedShopIdProp || shops[0]?.id || ''
+  );
+
+  const [routeFilter, setRouteFilter] = useState<string>(() => {
+    if (editingOrder?.shopRoute) return editingOrder.shopRoute;
+    return 'all';
+  });
+  const [shopSearch, setShopSearch] = useState<string>('');
+
+  // Cart
+  const [cart, setCart] = useState<{
+    [productId: string]: {
+      quantity: number;
+      unitPrice: number;
+      selectedUnit: string;
+    };
+  }>({});
+  const [productSelectedUnits, setProductSelectedUnits] = useState<{
+    [productId: string]: string;
+  }>({});
+  const [discountPercent, setDiscountPercent] = useState<number>(0);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('DUE');
+  const [paidAmountInput, setPaidAmountInput] = useState<string>('');
+  const [orderNotes, setOrderNotes] = useState<string>('');
+
+  // Synchronize from editingOrder when editing an order
+  useEffect(() => {
+    if (editingOrder) {
+      setSelectedShopId(editingOrder.shopId);
+      if (editingOrder.shopRoute) {
+        setRouteFilter(editingOrder.shopRoute);
+      }
+      const initialCart: {
+        [productId: string]: {
+          quantity: number;
+          unitPrice: number;
+          selectedUnit: string;
+        };
+      } = {};
+      const initialUnits: {
+        [productId: string]: string;
+      } = {};
+
+      editingOrder.items.forEach((it) => {
+        const matchedProd =
+          products.find((p) => p.id === it.productId) ||
+          products.find((p) => p.banglaName === it.productName || p.name === it.productName);
+        const prodKey = matchedProd ? matchedProd.id : (it.productId || it.productName);
+        const u = it.unit || (matchedProd?.unit || 'পিস');
+        initialCart[prodKey] = {
+          quantity: it.quantity,
+          unitPrice: it.unitPrice,
+          selectedUnit: u,
+        };
+        initialUnits[prodKey] = u;
+      });
+
+      setCart(initialCart);
+      setProductSelectedUnits(initialUnits);
+      setDiscountPercent(editingOrder.discountPercent || 0);
+      setPaymentMethod(editingOrder.paymentMethod || 'DUE');
+      setPaidAmountInput(editingOrder.paidAmount ? String(editingOrder.paidAmount) : '');
+      setOrderNotes(editingOrder.notes || '');
+    } else if (selectedShopIdProp) {
+      setSelectedShopId(selectedShopIdProp);
+    }
+  }, [editingOrder, selectedShopIdProp, products]);
+
+  // Product Catalog search & filter
+  const [productSearch, setProductSearch] = useState<string>('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+
+  // Modals
+  const [isAddShopModalOpen, setIsAddShopModalOpen] = useState(false);
+  const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
+  const [lastBookedOrder, setLastBookedOrder] = useState<any | null>(null);
+  const [lightboxProduct, setLightboxProduct] = useState<Product | null>(null);
+
+  const handleOneClickWhatsAppLastOrder = (ord: any) => {
+    if (!ord) return;
+    const biz = getBusinessInfo();
+    const lines = [
+      `*${biz.banglaName} - সেলস অর্ডার মেমো*`,
+      ord.memoNumber ? `মেমো নং: ${ord.memoNumber}` : '',
+      `তারিখ: ${new Date().toLocaleString('en-GB')}`,
+      `---------------------------------`,
+      `দোকান/ক্রেতা: ${ord.shopName}`,
+      `মোবাইল: ${ord.shopPhone}`,
+      `ঠিকানা: ${ord.shopAddress}`,
+      `---------------------------------`,
+      `পণ্যসমূহ:`,
+      ...ord.items.map(
+        (it: any, idx: number) =>
+          `${idx + 1}. ${it.productName} - ${it.quantity} ${it.unit} @ ৳${it.unitPrice} = ৳${it.lineTotal}`
+      ),
+      `---------------------------------`,
+      `*মোট: ৳${ord.netTotal}*`,
+      `অগ্রিম: `,
+      `বাঁকী: `,
+    ].filter(Boolean);
+
+    const text = encodeURIComponent(lines.join('\n'));
+    const rawPhone = ord.shopPhone || '';
+    const banglaToEng = rawPhone.replace(/[০-৯]/g, (d: string) =>
+      '০১২৩৪৫৬৭৮৯'.indexOf(d).toString()
+    );
+    const digitsOnly = banglaToEng.replace(/[^0-9]/g, '');
+    const cleanPhone = !digitsOnly
+      ? ''
+      : digitsOnly.startsWith('880')
+      ? digitsOnly
+      : digitsOnly.startsWith('0')
+      ? `88${digitsOnly}`
+      : `880${digitsOnly}`;
+
+    const url = cleanPhone
+      ? `https://wa.me/${cleanPhone}?text=${text}`
+      : `https://wa.me/?text=${text}`;
+    window.open(url, '_blank');
+  };
+
+  // Distinct routes derived from shops and the dynamic routes prop
+  const availableRouteNames = useMemo(() => {
+    const rSet = new Set<string>();
+    // From dynamic routes prop
+    routes.forEach(r => rSet.add(r.banglaName));
+    // From existing shops (fallback/legacy)
+    shops.forEach((s) => {
+      if (s.routeArea) rSet.add(s.routeArea);
+    });
+    return Array.from(rSet);
+  }, [shops, routes]);
+
+  // Distinct categories
+  const categories = useMemo(() => {
+    const cSet = new Set<string>();
+    products.forEach((p) => cSet.add(p.category));
+    return Array.from(cSet);
+  }, [products]);
+
+  // Filtered shops
+  const filteredShops = useMemo(() => {
+    return shops.filter((s) => {
+      const matchRoute = routeFilter === 'all' || s.routeArea === routeFilter;
+      const matchText =
+        s.name.toLowerCase().includes(shopSearch.toLowerCase()) ||
+        s.ownerName.toLowerCase().includes(shopSearch.toLowerCase()) ||
+        s.phone.includes(shopSearch);
+      return matchRoute && matchText;
+    });
+  }, [shops, routeFilter, shopSearch]);
+
+  // Keep selectedShopId synchronized with filteredShops when routeFilter or shopSearch changes
+  useEffect(() => {
+    if (editingOrder && shops.some((s) => s.id === editingOrder.shopId)) {
+      setSelectedShopId(editingOrder.shopId);
+      return;
+    }
+    if (filteredShops.length > 0) {
+      const existsInFiltered = filteredShops.some((s) => s.id === selectedShopId);
+      if (!existsInFiltered) {
+        setSelectedShopId(filteredShops[0].id);
+      }
+    } else if (selectedShopId !== '') {
+      if (!editingOrder) {
+        setSelectedShopId('');
+      }
+    }
+  }, [filteredShops, selectedShopId, editingOrder, shops]);
+
+  const selectedShop = useMemo(() => {
+    return (
+      shops.find((s) => s.id === selectedShopId) ||
+      filteredShops.find((s) => s.id === selectedShopId) ||
+      filteredShops[0] ||
+      null
+    );
+  }, [shops, filteredShops, selectedShopId]);
+
+  // Tool #5: Find most recent order for the selected shop
+  const lastShopOrder = useMemo(() => {
+    if (!selectedShop || !orders || orders.length === 0) return null;
+    const shopOrders = orders
+      .filter(
+        (o) =>
+          o.deliveryStatus !== 'CANCELLED' &&
+          o.items &&
+          o.items.length > 0 &&
+          (o.shopId === selectedShop.id ||
+            (o.shopName && o.shopName.trim().toLowerCase() === selectedShop.name.trim().toLowerCase()))
+      )
+      .sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
+    return shopOrders[0] || null;
+  }, [selectedShop, orders]);
+
+  const [repeatNotice, setRepeatNotice] = useState<string | null>(null);
+
+  // Helper to determine the effective unit for a product
+  const getEffectiveUnit = (productId: string, prod: Product): string => {
+    if (cart[productId]?.selectedUnit) {
+      return cart[productId].selectedUnit;
+    }
+    if (productSelectedUnits[productId]) {
+      return productSelectedUnits[productId];
+    }
+    return prod.unit || 'পিস';
+  };
+
+  // Helper to get available units for a product in dropdown
+  const getAvailableUnitsForProduct = (prod: Product): string[] => {
+    const base = prod.unit || 'পিস';
+    const list: string[] = [base];
+
+    // Always give option for 'পিস' if not already base unit
+    if (base !== 'পিস') {
+      list.push('পিস');
+    }
+
+    // If not 'ডজন', give 'ডজন' option
+    if (base !== 'ডজন') {
+      list.push('ডজন');
+    }
+
+    return Array.from(new Set(list));
+  };
+
+  // Helper to calculate default price for chosen unit (ড্রপডাউন বক্সে সেই অনুযায়ী ১ পিসের দাম ও অন্যান্য এককের দর বসবে)
+  const getDefaultPriceForUnit = (prod: Product, targetUnit: string): number => {
+    const baseUnit = prod.unit || 'পিস';
+    const piecesPerBase =
+      prod.piecesPerUnit && prod.piecesPerUnit > 0
+        ? prod.piecesPerUnit
+        : baseUnit === 'ডজন'
+        ? 12
+        : baseUnit === 'পাতা'
+        ? 10
+        : baseUnit === 'বক্স' || baseUnit === 'কার্টুন'
+        ? 24
+        : baseUnit === 'প্যাকেট'
+        ? 12
+        : 1;
+
+    // Single piece price (১ পিসের দাম)
+    const unitPrice = Number(prod.unitPrice) || 0;
+    const onePiecePrice =
+      baseUnit === 'পিস'
+        ? unitPrice
+        : unitPrice / piecesPerBase;
+
+    if (targetUnit === baseUnit) {
+      return unitPrice;
+    }
+    if (targetUnit === 'পিস') {
+      return +(onePiecePrice.toFixed(2));
+    }
+    if (targetUnit === 'ডজন') {
+      return +((onePiecePrice * 12).toFixed(2));
+    }
+    if (targetUnit === 'পাতা') {
+      return +((onePiecePrice * 10).toFixed(2));
+    }
+    if (targetUnit === 'বক্স' || targetUnit === 'কার্টুন') {
+      return +((onePiecePrice * 24).toFixed(2));
+    }
+    if (targetUnit === 'প্যাকেট') {
+      return +((onePiecePrice * 12).toFixed(2));
+    }
+    if (prod.piecesPerUnit && prod.piecesPerUnit > 0 && targetUnit === prod.unit) {
+      return unitPrice;
+    }
+
+    return unitPrice;
+  };
+
+  // Helper to calculate max available stock in terms of the chosen unit
+  const getMaxStockForUnit = (prod: Product, targetUnit: string): number => {
+    const baseUnit = prod.unit || 'পিস';
+    const piecesPerBase =
+      prod.piecesPerUnit && prod.piecesPerUnit > 0
+        ? prod.piecesPerUnit
+        : baseUnit === 'ডজন'
+        ? 12
+        : baseUnit === 'পাতা'
+        ? 10
+        : baseUnit === 'বক্স' || baseUnit === 'কার্টুন'
+        ? 24
+        : baseUnit === 'প্যাকেট'
+        ? 12
+        : 1;
+
+    // Total stock in single pieces
+    const stock = Number(prod.stock) || 0;
+    const totalPieces =
+      baseUnit === 'পিস'
+        ? stock
+        : stock * piecesPerBase;
+
+    if (targetUnit === baseUnit) {
+      return stock;
+    }
+    if (targetUnit === 'পিস') {
+      return totalPieces;
+    }
+    if (targetUnit === 'ডজন') {
+      return Math.floor(totalPieces / 12);
+    }
+    if (targetUnit === 'পাতা') {
+      return Math.floor(totalPieces / 10);
+    }
+    if (targetUnit === 'বক্স' || targetUnit === 'কার্টুন') {
+      return Math.floor(totalPieces / 24);
+    }
+    if (targetUnit === 'প্যাকেট') {
+      return Math.floor(totalPieces / 12);
+    }
+
+    return stock;
+  };
+
+  const handleUnitChange = (productId: string, newUnit: string) => {
+    const prod = products.find((p) => p.id === productId);
+    if (!prod) return;
+
+    setProductSelectedUnits((prev) => ({ ...prev, [productId]: newUnit }));
+
+    setCart((prev) => {
+      if (!prev[productId] || prev[productId].quantity <= 0) return prev;
+      const currentEntry = prev[productId];
+      const newPrice = getDefaultPriceForUnit(prod, newUnit);
+      const maxStock = getMaxStockForUnit(prod, newUnit);
+      const clampedQty = Math.max(1, Math.min(currentEntry.quantity, maxStock));
+
+      return {
+        ...prev,
+        [productId]: {
+          quantity: clampedQty,
+          unitPrice: newPrice,
+          selectedUnit: newUnit,
+        },
+      };
+    });
+  };
+
+  const handleRepeatLastOrder = () => {
+    if (!lastShopOrder) return;
+    const nextCart: {
+      [productId: string]: {
+        quantity: number;
+        unitPrice: number;
+        selectedUnit: string;
+      };
+    } = { ...cart };
+    let addedCount = 0;
+
+    lastShopOrder.items.forEach((it) => {
+      const matchedProd =
+        products.find((p) => p.id === it.productId) ||
+        products.find((p) => p.banglaName === it.productName || p.name === it.productName);
+      if (matchedProd && matchedProd.stock > 0) {
+        const itemUnit = it.unit || (matchedProd.unit || 'পিস');
+        const maxStock = getMaxStockForUnit(matchedProd, itemUnit);
+        const safeQty = Math.min(it.quantity, maxStock);
+        if (safeQty > 0) {
+          nextCart[matchedProd.id] = {
+            quantity: safeQty,
+            unitPrice: it.unitPrice || getDefaultPriceForUnit(matchedProd, itemUnit),
+            selectedUnit: itemUnit,
+          };
+          addedCount++;
+        }
+      }
+    });
+
+    if (addedCount > 0) {
+      setCart(nextCart);
+      setRepeatNotice(`${lastShopOrder.shopName}-এর আগের মেমো (#${lastShopOrder.memoNumber}) থেকে ${addedCount}টি পণ্য কার্টে যুক্ত হয়েছে!`);
+      setTimeout(() => setRepeatNotice(null), 4000);
+    } else {
+      setRepeatNotice('আগের অর্ডারের পণ্যগুলোর স্টক বর্তমানে শেষ অথবা ক্যাটালগে নেই।');
+      setTimeout(() => setRepeatNotice(null), 4000);
+    }
+  };
+
+  const handleAddReturnedItemsToCart = () => {
+    if (!lastShopOrder) return;
+
+    // Get returned items either from structured returnedItems or by matching returnReason
+    const itemsToAdd: { productId?: string; productName: string; unit: string; quantity: number; unitPrice: number; actionNote?: string }[] = [];
+
+    if (lastShopOrder.returnedItems && lastShopOrder.returnedItems.length > 0) {
+      lastShopOrder.returnedItems.forEach((ri) => {
+        if (ri.quantity > 0) {
+          itemsToAdd.push(ri);
+        }
+      });
+    } else if ((lastShopOrder.returnAmount || 0) > 0 || lastShopOrder.returnReason) {
+      lastShopOrder.items.forEach((it) => {
+        if (lastShopOrder.returnReason && lastShopOrder.returnReason.includes(it.productName)) {
+          itemsToAdd.push({
+            productId: it.productId,
+            productName: it.productName,
+            unit: it.unit,
+            quantity: 1,
+            unitPrice: it.unitPrice,
+            actionNote: 'পরের বার নেব',
+          });
+        }
+      });
+      if (itemsToAdd.length === 0 && lastShopOrder.items.length > 0) {
+        itemsToAdd.push({
+          ...lastShopOrder.items[0],
+          quantity: 1,
+          actionNote: 'পরের বার নেব',
+        });
+      }
+    }
+
+    if (itemsToAdd.length === 0) {
+      setRepeatNotice('নির্দিষ্ট কোনো রিটার্ন পণ্য পাওয়া যায়নি।');
+      setTimeout(() => setRepeatNotice(null), 4000);
+      return;
+    }
+
+    const nextCart: {
+      [productId: string]: {
+        quantity: number;
+        unitPrice: number;
+        selectedUnit: string;
+      };
+    } = { ...cart };
+    let addedCount = 0;
+
+    itemsToAdd.forEach((it) => {
+      const matchedProd =
+        products.find((p) => p.id === it.productId) ||
+        products.find((p) => p.banglaName === it.productName || p.name === it.productName);
+      if (matchedProd && matchedProd.stock > 0) {
+        const itemUnit = it.unit || (matchedProd.unit || 'পিস');
+        const maxStock = getMaxStockForUnit(matchedProd, itemUnit);
+        const safeQty = Math.min(it.quantity, maxStock);
+        if (safeQty > 0) {
+          nextCart[matchedProd.id] = {
+            quantity: (nextCart[matchedProd.id]?.quantity || 0) + safeQty,
+            unitPrice: it.unitPrice || getDefaultPriceForUnit(matchedProd, itemUnit),
+            selectedUnit: itemUnit,
+          };
+          addedCount++;
+        }
+      }
+    });
+
+    if (addedCount > 0) {
+      setCart(nextCart);
+      setRepeatNotice(`পূর্বের মেমো (#${lastShopOrder.memoNumber}) থেকে ${addedCount}টি রিটার্ন/পেন্ডিং পণ্য কার্টে যুক্ত করা হয়েছে!`);
+      setTimeout(() => setRepeatNotice(null), 4000);
+    } else {
+      setRepeatNotice('ফেরত পণ্যের স্টক শেষ অথবা পণ্যটি ক্যাটালগে নেই।');
+      setTimeout(() => setRepeatNotice(null), 4000);
+    }
+  };
+
+  // Filtered products
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      const matchCat = selectedCategory === 'all' || p.category === selectedCategory;
+      const matchText =
+        p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
+        p.banglaName.toLowerCase().includes(productSearch.toLowerCase()) ||
+        p.sku.toLowerCase().includes(productSearch.toLowerCase());
+      return matchCat && matchText;
+    });
+  }, [products, selectedCategory, productSearch]);
+
+  // Cart calculation
+  const cartItems: OrderItem[] = useMemo(() => {
+    return Object.entries(cart)
+      .filter(([_, data]) => data.quantity > 0)
+      .map(([productId, data]) => {
+        const prod = products.find((p) => p.id === productId);
+        if (!prod) return null;
+
+        const qty = data.quantity;
+        const price = data.unitPrice;
+        const unit = data.selectedUnit || getEffectiveUnit(productId, prod);
+
+        // Trade offer logic: e.g. 1 free every 10
+        let tradeOfferQty = 0;
+        if (prod.tradeOfferDesc?.includes('১০') && qty >= 10) {
+          tradeOfferQty = Math.floor(qty / 10);
+        }
+
+        const lineTotal = +(price * qty).toFixed(2);
+        return {
+          productId: prod.id,
+          productName: prod.banglaName || prod.name,
+          unit: unit,
+          unitPrice: price,
+          quantity: qty,
+          tradeOfferQty,
+          lineTotal,
+          supplier: prod.supplier || undefined,
+        };
+      })
+      .filter(Boolean) as OrderItem[];
+  }, [cart, products, productSelectedUnits]);
+
+  const subTotal = useMemo(() => {
+    return cartItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  }, [cartItems]);
+
+  const discountAmount = useMemo(() => {
+    if (discountPercent <= 0) return 0;
+    return Math.round((subTotal * discountPercent) / 100);
+  }, [subTotal, discountPercent]);
+
+  const netTotal = useMemo(() => {
+    return Math.max(0, subTotal - discountAmount);
+  }, [subTotal, discountAmount]);
+
+  // Total quantity count in cart
+  const totalCartItemCount = useMemo(() => {
+    return cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  }, [cartItems]);
+
+  useEffect(() => {
+    onCartCountChange?.(totalCartItemCount);
+  }, [totalCartItemCount, onCartCountChange]);
+
+  // At order booking time, goods are not delivered yet.
+  // Cash collection and due settlement happen at delivery time (next day).
+  const paidAmount = 0;
+  const dueAmount = 0;
+
+  const totalOutstandingAfterOrder = useMemo(() => {
+    return selectedShop ? selectedShop.previousDue : 0;
+  }, [selectedShop]);
+
+  // Handlers
+  const handleQuantityChange = (productId: string, delta: number) => {
+    const prod = products.find((p) => p.id === productId);
+    if (!prod) return;
+
+    const curUnit = getEffectiveUnit(productId, prod);
+    const maxStock = getMaxStockForUnit(prod, curUnit);
+
+    setCart((prev) => {
+      const current = prev[productId] || {
+        quantity: 0,
+        unitPrice: getDefaultPriceForUnit(prod, curUnit),
+        selectedUnit: curUnit,
+      };
+      const nextQty = current.quantity + delta;
+
+      if (nextQty <= 0) {
+        const copy = { ...prev };
+        delete copy[productId];
+        return copy;
+      }
+      if (nextQty > maxStock) {
+        alert(`দুঃখিত! এই পণ্যের সর্বোচ্চ স্টক মাত্র ${maxStock} ${curUnit}`);
+        return prev;
+      }
+      return {
+        ...prev,
+        [productId]: {
+          ...current,
+          quantity: nextQty,
+          selectedUnit: curUnit,
+        },
+      };
+    });
+  };
+
+  const handleSetExactQuantity = (productId: string, val: string) => {
+    const num = parseInt(val, 10);
+    const prod = products.find((p) => p.id === productId);
+    if (!prod) return;
+
+    const curUnit = getEffectiveUnit(productId, prod);
+    const maxStock = getMaxStockForUnit(prod, curUnit);
+
+    if (isNaN(num) || num <= 0) {
+      setCart((prev) => {
+        const copy = { ...prev };
+        delete copy[productId];
+        return copy;
+      });
+      return;
+    }
+
+    const clamped = Math.min(num, maxStock);
+    if (num > maxStock) {
+      alert(`সর্বোচ্চ স্টক মাত্র ${maxStock} ${curUnit}`);
+    }
+    setCart((prev) => ({
+      ...prev,
+      [productId]: {
+        ...(prev[productId] || {
+          unitPrice: getDefaultPriceForUnit(prod, curUnit),
+          selectedUnit: curUnit,
+        }),
+        quantity: clamped,
+        selectedUnit: curUnit,
+      },
+    }));
+  };
+
+  const handleUpdatePrice = (productId: string, newPrice: string) => {
+    const price = parseFloat(newPrice);
+    if (isNaN(price)) return;
+
+    setCart((prev) => {
+      if (!prev[productId]) return prev;
+      return {
+        ...prev,
+        [productId]: { ...prev[productId], unitPrice: price },
+      };
+    });
+  };
+
+  const handleClearCart = () => {
+    if (cartItems.length > 0) {
+      setCart({});
+    }
+  };
+
+  const handleSubmitOrder = () => {
+    if (!selectedShop) {
+      alert('দয়া করে প্রথমে একটি দোকান সিলেক্ট করুন');
+      return;
+    }
+    if (cartItems.length === 0) {
+      alert('অর্ডার কার্টে অন্তত একটি পণ্য যোগ করুন');
+      return;
+    }
+
+    if (editingOrder) {
+      const updatedOrder: Order = {
+        ...editingOrder,
+        shopId: selectedShop.id,
+        shopName: selectedShop.name,
+        shopPhone: selectedShop.phone,
+        shopAddress: selectedShop.address,
+        shopRoute: selectedShop.routeArea,
+        items: cartItems,
+        subTotal,
+        discountPercent,
+        discountAmount,
+        netTotal,
+        paidAmount,
+        dueAmount,
+        totalOutstandingAfterOrder,
+        paymentMethod,
+        notes: orderNotes,
+      };
+
+      if (onUpdateOrder) {
+        onUpdateOrder(updatedOrder);
+      }
+      return;
+    }
+
+    const memoNumber = `MS-${Date.now().toString().slice(-6)}`;
+    const orderData = {
+      memoNumber,
+      shopId: selectedShop.id,
+      shopName: selectedShop.name,
+      shopPhone: selectedShop.phone,
+      shopAddress: selectedShop.address,
+      shopRoute: selectedShop.routeArea,
+      items: cartItems,
+      subTotal,
+      discountPercent,
+      discountAmount,
+      netTotal,
+      paidAmount,
+      dueAmount,
+      previousDueAtBooking: selectedShop.previousDue,
+      totalOutstandingAfterOrder,
+      paymentMethod,
+      deliveryStatus: 'PENDING' as const,
+      notes: orderNotes,
+    };
+
+    setLastBookedOrder(orderData);
+    onOrderCreated(orderData);
+
+    // Reset form
+    setCart({});
+    setDiscountPercent(0);
+    setPaidAmountInput('');
+    setOrderNotes('');
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 space-y-4">
+      {/* Edit Mode Top Prominent Banner */}
+      {editingOrder && (
+        <div className="bg-linear-to-r from-amber-50 to-orange-50 border-2 border-amber-400 rounded-2xl p-4 shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-amber-950 flex items-center justify-center shrink-0 shadow-xs">
+              <Edit3 className="w-5 h-5 text-neutral-950" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-black uppercase tracking-wider bg-amber-300 text-amber-950 px-2 py-0.5 rounded-md">
+                  মেমো এডিট মোড
+                </span>
+                <span className="font-extrabold text-sm sm:text-base text-neutral-900">
+                  মেমো #{editingOrder.memoNumber}
+                </span>
+                <span className="text-xs text-neutral-600 font-bold">
+                  ({editingOrder.shopName} - {editingOrder.shopRoute})
+                </span>
+              </div>
+              <p className="text-xs text-neutral-700 mt-1">
+                পূর্বের মেমোর দোকান, রুট ও পণ্যসমূহ সরাসরি লোড হয়েছে। নতুন পণ্য যোগ করতে পারেন অথবা পরিমাণ পরিবর্তন করে নিচে <strong>'মেমো আপডেট সংরক্ষণ করুন'</strong> বাটনে চাপুন।
+              </p>
+            </div>
+          </div>
+          {onCancelEditOrder && (
+            <button
+              type="button"
+              onClick={onCancelEditOrder}
+              className="shrink-0 px-3 py-2 bg-white hover:bg-neutral-100 text-neutral-800 border border-neutral-300 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+            >
+              <X className="w-4 h-4 text-rose-600" />
+              <span>এডিট বাতিল / নতুন অর্ডার</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* 1-Click WhatsApp Memo Send Banner right after booking an order */}
+      {lastBookedOrder && (
+        <div className="bg-emerald-900 text-white rounded-2xl p-3.5 sm:p-4 shadow-lg border border-emerald-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-emerald-700 flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5 text-emerald-200" />
+            </div>
+            <div>
+              <h4 className="font-extrabold text-xs sm:text-sm">
+                অর্ডার সফলভাবে কাটা হয়েছে! ({lastBookedOrder.shopName} - ৳{lastBookedOrder.netTotal.toLocaleString()})
+              </h4>
+              <p className="text-[11px] text-emerald-200">
+                মেমো #{lastBookedOrder.memoNumber} ক্রেতার হোয়াটসঅ্যাপে পাঠাতে নিচের বাটনে ক্লিক করুন
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => handleOneClickWhatsAppLastOrder(lastBookedOrder)}
+              className="flex-1 sm:flex-initial px-4 py-2.5 bg-[#25D366] hover:bg-[#1ebd5a] text-white font-black text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+            >
+              <Send className="w-4 h-4" />
+              <span>হোয়াটসঅ্যাপে এক ক্লিকে মেমো পাঠান</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLastBookedOrder(null)}
+              className="p-2 rounded-xl bg-emerald-800 hover:bg-emerald-700 text-emerald-200 cursor-pointer"
+              title="বন্ধ করুন"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Top Shop Selector & Quick Info Bar - Unlocked (Normal flow) */}
+      <div className="bg-white rounded-2xl shadow-sm border border-neutral-200/90 p-3 sm:p-4 transition-all">
+        <div className="flex flex-col md:flex-row gap-3 items-start md:items-center justify-between pb-3 border-b border-neutral-200">
+          <div className="w-full md:w-auto flex-1">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-bold text-neutral-700 flex items-center gap-1.5">
+                <Store className="w-4 h-4 text-emerald-700" />
+                অর্ডার নেওয়ার দোকান নির্বাচন করুন:
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  id="header-cart-btn"
+                  type="button"
+                  onClick={() => setIsCartDrawerOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-800 hover:bg-emerald-700 active:bg-emerald-900 text-white rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer"
+                  title="অর্ডার কাটুন / কার্ট দেখুন"
+                >
+                  <ShoppingBag className="w-3.5 h-3.5 text-emerald-200" />
+                  <span>অর্ডার কাটুন</span>
+                  <span className="bg-emerald-950 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                    {totalCartItemCount}
+                  </span>
+                  <span className="font-extrabold border-l border-emerald-600 pl-1.5 text-[11px]">
+                    ৳{netTotal.toLocaleString()}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setIsAddShopModalOpen(true)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ নতুন দোকান</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {/* Shop typing search bar */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-neutral-400" />
+                <input
+                  type="text"
+                  value={shopSearch}
+                  onChange={(e) => setShopSearch(e.target.value)}
+                  placeholder="দোকানের নাম, প্রোপ্রাইটর বা ফোন নম্বর লিখে খুঁজুন..."
+                  className="w-full text-xs pl-8 pr-3 py-1.5 rounded-xl border border-neutral-300 focus:outline-hidden focus:ring-2 focus:ring-emerald-600 text-neutral-900 bg-white"
+                />
+                {shopSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setShopSearch('')}
+                    className="absolute right-3 top-1.5 text-xs text-neutral-400 hover:text-neutral-600 p-0.5"
+                  >
+                    ক্লিয়ার
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Route Filter */}
+                <select
+                  value={routeFilter}
+                  onChange={(e) => setRouteFilter(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 bg-neutral-50 border border-neutral-300 rounded-xl focus:ring-2 focus:ring-emerald-500 font-medium text-neutral-800"
+                >
+                  <option value="all">সব রুট / এলাকা ({shops.length} দোকান)</option>
+                  {availableRouteNames.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Shop Dropdown */}
+                <select
+                  value={selectedShop?.id || ''}
+                  onChange={(e) => setSelectedShopId(e.target.value)}
+                  className="w-full text-xs py-2 px-2.5 bg-neutral-50 border border-neutral-300 rounded-xl font-bold text-neutral-900 focus:ring-2 focus:ring-emerald-600"
+                >
+                  {filteredShops.length === 0 ? (
+                    <option value="">এই রুটে কোনো দোকান পাওয়া যায়নি</option>
+                  ) : (
+                    filteredShops.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.ownerName}) {s.previousDue > 0 ? `- বাকী: ৳${s.previousDue}` : '- নগদ'}
+                      </option>
+                    ))
+                  )}
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Selected Shop Info Card */}
+        {selectedShop && (
+          <div className="mt-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-sm text-neutral-900">{selectedShop.name}</span>
+                <span className="text-neutral-500">|</span>
+                <span className="text-neutral-600 flex items-center gap-1">
+                  <Phone className="w-3 h-3 text-neutral-400" /> {selectedShop.phone}
+                </span>
+                <span className="hidden sm:inline text-neutral-500">|</span>
+                <span className="hidden sm:inline text-neutral-500">{selectedShop.address}</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Tool #5: 1-Click Repeat Last Order Button */}
+                {lastShopOrder && (
+                  <button
+                    type="button"
+                    onClick={handleRepeatLastOrder}
+                    className="px-3 py-1 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-900 border border-teal-300 font-extrabold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                    title={`সর্বশেষ মেমো #${lastShopOrder.memoNumber} (${lastShopOrder.items.length}টি পণ্য, ৳${lastShopOrder.netTotal}) এক ক্লিকে কার্টে কপি করুন`}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-teal-700" />
+                    <span>আগের অর্ডার কপি করুন ({lastShopOrder.items.length} পদ)</span>
+                  </button>
+                )}
+
+                {selectedShop.previousDue > 0 && (
+                  <div
+                    className={`px-3 py-1 rounded-xl font-bold flex items-center gap-1.5 ${
+                      selectedShop.previousDue > 8000
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                        : 'bg-amber-50 text-amber-800 border border-amber-200'
+                    }`}
+                  >
+                    {selectedShop.previousDue > 8000 && <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />}
+                    <span>পূর্বের বকেয়া: ৳{selectedShop.previousDue.toLocaleString()}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {repeatNotice && (
+              <div className="px-3 py-2 rounded-xl bg-teal-900 text-white text-xs font-bold flex items-center justify-between animate-in fade-in">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-teal-300 shrink-0" />
+                  <span>{repeatNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRepeatNotice(null)}
+                  className="text-teal-200 hover:text-white cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {/* Return & Follow-up Information Card for Selected Shop */}
+            {lastShopOrder &&
+              ((lastShopOrder.returnAmount || 0) > 0 ||
+                (lastShopOrder.returnedItems && lastShopOrder.returnedItems.length > 0) ||
+                (lastShopOrder.returnReason && lastShopOrder.returnReason.trim() !== '')) && (
+                <div className="bg-linear-to-r from-amber-50 to-orange-50 border-2 border-amber-300 rounded-2xl p-3 sm:p-4 shadow-sm animate-in fade-in space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-amber-200">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                        <RotateCcw className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-black text-amber-950">
+                            পূর্বের ডেলিভারিতে পণ্য রিটার্ন / পেন্ডিং ফলো-আপ হিসাব
+                          </span>
+                          <span className="text-[10px] font-bold bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full">
+                            মেমো #{lastShopOrder.memoNumber}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          তারিখ: {new Date(lastShopOrder.orderDate).toLocaleDateString('bn-BD')} • মোট ফেরত সমন্বয়: <strong className="font-mono">৳{(lastShopOrder.returnAmount || 0).toLocaleString()}</strong>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddReturnedItemsToCart}
+                        className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-extrabold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
+                        title="ফেরত দেওয়া পণ্যগুলো নতুন অর্ডারে সরাসরি যুক্ত করতে ক্লিক করুন"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>ফেরত পণ্যগুলো কার্টে যুক্ত করুন</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Returned items breakdown */}
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-extrabold text-amber-900 flex items-center gap-1.5">
+                      <span>দোকানদার যে পণ্যগুলো ফেরত দিয়েছিলেন বা পরের বার নেওয়ার কথা বলেছিলেন:</span>
+                    </div>
+
+                    {lastShopOrder.returnedItems && lastShopOrder.returnedItems.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                        {lastShopOrder.returnedItems.map((rit, idx) => (
+                          <div
+                            key={idx}
+                            className="bg-white/90 border border-amber-200 rounded-xl p-2.5 flex items-center justify-between gap-2 text-xs shadow-2xs"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-extrabold text-neutral-900 block truncate">{rit.productName}</span>
+                              <span className="text-[10px] text-neutral-600">
+                                {rit.quantity} {rit.unit} @ ৳{rit.unitPrice} = ৳{(rit.quantity * rit.unitPrice).toLocaleString()}
+                              </span>
+                            </div>
+                            <span
+                              className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md shrink-0 ${
+                                rit.actionNote === 'পরের বার নেব'
+                                  ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                  : rit.actionNote === 'ড্যামেজ / নষ্ট'
+                                  ? 'bg-rose-100 text-rose-900 border border-rose-300'
+                                  : 'bg-amber-100 text-amber-900'
+                              }`}
+                            >
+                              {rit.actionNote || rit.returnReason || 'ফেরত'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="bg-white/90 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-950 flex items-center justify-between">
+                        <span>
+                          বিবরণ: <strong>{lastShopOrder.returnReason || 'পণ্য ফেরত সমন্বিত'}</strong> (ফেরতের পরিমাণ: ৳{(lastShopOrder.returnAmount || 0).toLocaleString()})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+          </div>
+        )}
+      </div>
+
+      {/* Main Layout: Product Catalog (Left) + Cart & Order Summary (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        {/* Left: Product Catalog */}
+        <div className="lg:col-span-7 xl:col-span-8 space-y-3">
+          {/* Catalog Controls - Sticky Locked Search & Categories */}
+          <div className="sticky top-[52px] sm:top-[56px] md:top-[98px] z-20 bg-white/98 backdrop-blur-md p-3 rounded-2xl shadow-sm border border-neutral-200/90 space-y-2 transition-all">
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-3 text-neutral-400" />
+                <input
+                  type="text"
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  placeholder="পণ্য বা ব্র্যান্ড খুঁজুন... (তেল, চিনি, আটা, সাবান, ইত্যাদি)"
+                  className="w-full text-xs pl-9 pr-3 py-2 rounded-xl border border-neutral-300 focus:outline-hidden focus:ring-2 focus:ring-emerald-600 text-neutral-900 bg-white"
+                />
+                {productSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setProductSearch('')}
+                    className="absolute right-3 top-2.5 text-xs text-neutral-400 hover:text-neutral-600 cursor-pointer"
+                  >
+                    ক্লিয়ার
+                  </button>
+                )}
+              </div>
+              {/* Quick Compact Cart Button on Mobile/Tablet when sticky */}
+              <button
+                type="button"
+                onClick={() => setIsCartDrawerOpen(true)}
+                className="lg:hidden flex items-center gap-1.5 px-3 py-2 bg-emerald-800 hover:bg-emerald-700 active:bg-emerald-900 text-white rounded-xl text-xs font-bold shrink-0 shadow-xs cursor-pointer"
+                title="অর্ডার কাটুন / কার্ট দেখুন"
+              >
+                <ShoppingBag className="w-3.5 h-3.5 text-emerald-200" />
+                <span className="hidden sm:inline">অর্ডার কাটুন</span>
+                <span className="bg-emerald-950 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  {totalCartItemCount}
+                </span>
+                <span className="font-extrabold border-l border-emerald-600 pl-1 text-[11px]">
+                  ৳{netTotal.toLocaleString()}
+                </span>
+              </button>
+            </div>
+
+            {/* Category Chips */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+              <button
+                type="button"
+                onClick={() => setSelectedCategory('all')}
+                className={`px-3 py-1 rounded-lg shrink-0 font-medium transition-colors cursor-pointer ${
+                  selectedCategory === 'all'
+                    ? 'bg-emerald-800 text-white font-bold'
+                    : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                }`}
+              >
+                সকল ক্যাটাগরি ({products.length})
+              </button>
+              {categories.map((cat) => (
+                <button
+                  type="button"
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1 rounded-lg shrink-0 font-medium transition-colors cursor-pointer ${
+                    selectedCategory === cat
+                      ? 'bg-emerald-800 text-white font-bold'
+                      : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Product Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {filteredProducts.map((prod) => {
+              const inCartQty = cart[prod.id]?.quantity || 0;
+              const currentUnit = getEffectiveUnit(prod.id, prod);
+              const maxStock = getMaxStockForUnit(prod, currentUnit);
+              const currentPrice = cart[prod.id]?.unitPrice ?? getDefaultPriceForUnit(prod, currentUnit);
+              const isOutOfStock = maxStock <= 0;
+              const isLowStock =
+                !isOutOfStock &&
+                (currentUnit === 'ডজন'
+                  ? maxStock <= Math.max(1, Math.floor(prod.minStockAlert / 12))
+                  : maxStock <= prod.minStockAlert);
+
+              return (
+                <div
+                  key={prod.id}
+                  className={`bg-white rounded-2xl p-3 border transition-all flex flex-col justify-between ${
+                    inCartQty > 0
+                      ? 'border-emerald-500 ring-1 ring-emerald-500 shadow-xs'
+                      : 'border-neutral-200 hover:border-neutral-300'
+                  }`}
+                >
+                  <div>
+                    <div className="flex gap-3 items-start">
+                      {/* Product Image Stage (Studio Contrast & Clickable Full Image) */}
+                      <div
+                        onClick={() => prod.imageUrl && setLightboxProduct(prod)}
+                        title="ফুল ছবি বড় করে দেখতে ক্লিক করুন"
+                        className="w-18 h-18 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-b from-[#FAFBFD] via-[#F4F5F8] to-[#EAEDF2] border border-[#E2E8F0] shadow-[inset_0_1px_3px_rgba(0,0,0,0.03)] overflow-hidden shrink-0 flex items-center justify-center p-1.5 cursor-pointer hover:border-emerald-500 hover:shadow-xs group/img relative transition-all"
+                      >
+                        {prod.imageUrl ? (
+                          <>
+                            <img
+                              src={prod.imageUrl}
+                              alt={prod.banglaName}
+                              className="w-full h-full object-contain group-hover/img:scale-106 transition-transform duration-300"
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 flex items-center justify-center transition-opacity rounded-2xl">
+                              <span className="px-1.5 py-0.5 rounded-md bg-black/70 text-white text-[9px] font-bold flex items-center gap-0.5">
+                                <Maximize2 className="w-2.5 h-2.5" />
+                                <span>বড় ছবি</span>
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <Package className="w-7 h-7 text-neutral-400" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-1">
+                          <span className="text-[10px] font-semibold text-neutral-500 bg-neutral-100 px-2 py-0.5 rounded-md">
+                            {prod.category}
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                              isOutOfStock
+                                ? 'bg-rose-100 text-rose-800'
+                                : isLowStock
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-emerald-100 text-emerald-800'
+                            }`}
+                          >
+                            {isOutOfStock
+                              ? 'স্টক শেষ'
+                              : `স্টক: ${maxStock} ${currentUnit}`}
+                          </span>
+                        </div>
+
+                        <h4 className="font-bold text-sm text-neutral-900 mt-1 leading-snug">
+                          {prod.banglaName}
+                        </h4>
+                        <p className="text-[11px] text-neutral-500 truncate">{prod.name} ({prod.sku})</p>
+                      </div>
+                    </div>
+
+                    {prod.tradeOfferDesc && (
+                      <div className="mt-2 flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200/60">
+                        <Tag className="w-3 h-3 text-emerald-600 shrink-0" />
+                        <span>অফার: {prod.tradeOfferDesc}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-2 border-t border-neutral-100 flex flex-wrap items-center justify-between gap-2">
+                    {/* Price Column */}
+                    <div className="flex flex-col min-w-[70px]">
+                      <span className="text-[10px] text-neutral-500 font-medium">দর / {currentUnit}:</span>
+                      {inCartQty > 0 ? (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <span className="text-xs font-bold text-emerald-800">৳</span>
+                          <input
+                            type="number"
+                            step="any"
+                            value={cart[prod.id]?.unitPrice ?? currentPrice}
+                            onChange={(e) => handleUpdatePrice(prod.id, e.target.value)}
+                            className="w-16 p-1 text-xs font-black text-emerald-800 bg-neutral-50 border border-neutral-300 rounded-lg focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="text-sm font-extrabold text-neutral-900">৳{currentPrice}</span>
+                          {prod.unit !== 'পিস' && currentUnit === prod.unit && prod.piecesPerUnit && prod.piecesPerUnit > 1 && (
+                            <span className="text-[9.5px] font-semibold text-emerald-700 leading-tight">
+                              (১ পিস = ৳{(prod.unitPrice / prod.piecesPerUnit).toFixed(2)})
+                            </span>
+                          )}
+                          {currentUnit === 'পিস' && prod.unit !== 'পিস' && (
+                            <span className="text-[9.5px] font-semibold text-neutral-500 leading-tight">
+                              (১ {prod.unit} = {prod.piecesPerUnit || 1} পিস)
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Unit Dropdown Selector (বক্স / পাতা / প্যাকেট / ডজন / পিস) & Quantity Controls */}
+                    <div className="flex items-center gap-1.5 ml-auto">
+                      {/* Unit Dropdown Box */}
+                      <select
+                        value={currentUnit}
+                        onChange={(e) => handleUnitChange(prod.id, e.target.value)}
+                        className="text-xs font-bold bg-neutral-100 hover:bg-neutral-200/70 text-neutral-800 py-1.5 px-2 rounded-xl border border-neutral-300 focus:outline-hidden focus:ring-1 focus:ring-emerald-500 cursor-pointer shadow-2xs transition-colors"
+                        title="একক নির্বাচন করুন (বক্স / পাতা / প্যাকেট / ডজন / পিস)"
+                      >
+                        {getAvailableUnitsForProduct(prod).map((u) => {
+                          const uPrice = getDefaultPriceForUnit(prod, u);
+                          return (
+                            <option key={u} value={u}>
+                              {u} (৳{uPrice})
+                            </option>
+                          );
+                        })}
+                      </select>
+
+                      {/* Quantity Selector */}
+                      {inCartQty > 0 ? (
+                        <div className="flex items-center gap-1 bg-neutral-100 p-1 rounded-xl border border-neutral-300">
+                          <button
+                            type="button"
+                            onClick={() => handleQuantityChange(prod.id, -1)}
+                            className="w-7 h-7 bg-white rounded-lg flex items-center justify-center text-neutral-700 hover:bg-rose-50 hover:text-rose-600 shadow-2xs font-bold cursor-pointer transition-colors"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <input
+                            type="number"
+                            value={inCartQty}
+                            onChange={(e) => handleSetExactQuantity(prod.id, e.target.value)}
+                            className="w-10 text-center text-xs font-bold bg-transparent text-neutral-900 focus:outline-hidden"
+                            min="0"
+                            max={maxStock}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleQuantityChange(prod.id, 1)}
+                            disabled={inCartQty >= maxStock}
+                            className="w-7 h-7 bg-white rounded-lg flex items-center justify-center text-neutral-700 hover:bg-emerald-50 hover:text-emerald-700 shadow-2xs font-bold disabled:opacity-40 cursor-pointer transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          id={`add-to-cart-${prod.id}`}
+                          onClick={() => handleQuantityChange(prod.id, 1)}
+                          disabled={maxStock <= 0}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                        >
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                          <span>+ যোগ</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right: Cart & Order Billing Panel */}
+        <div className="lg:col-span-5 xl:col-span-4 space-y-3">
+          <div className="bg-white rounded-2xl shadow-md border border-neutral-200/90 p-4 sticky top-[115px]">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-200">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="w-5 h-5 text-emerald-700" />
+                <h3 className="font-bold text-base text-neutral-900">অর্ডার কার্ট</h3>
+                <span className="text-xs font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                  {cartItems.length} আইটেম
+                </span>
+              </div>
+              {cartItems.length > 0 && (
+                <button
+                  onClick={handleClearCart}
+                  className="text-xs text-rose-600 hover:text-rose-700 font-medium flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>মুছুন</span>
+                </button>
+              )}
+            </div>
+
+            {/* Cart Items List */}
+            <div className="py-3 max-h-56 overflow-y-auto divide-y divide-neutral-100 space-y-2">
+              {cartItems.length === 0 ? (
+                <div className="text-center py-6 text-neutral-400">
+                  <ShoppingBag className="w-8 h-8 mx-auto mb-1.5 opacity-40" />
+                  <p className="text-xs font-medium">কার্ট খালি রয়েছে</p>
+                  <p className="text-[11px] text-neutral-400">বাম পাশের পণ্য তালিকা থেকে যোগ করুন</p>
+                </div>
+              ) : (
+                cartItems.map((item) => (
+                  <div key={item.productId} className="pt-2 first:pt-0 flex items-center justify-between gap-2 text-xs">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-neutral-900 truncate">{item.productName}</p>
+                      <p className="text-neutral-500 text-[11px]">
+                        {item.quantity} {item.unit} × ৳{item.unitPrice}
+                        {item.tradeOfferQty ? (
+                          <span className="text-emerald-700 font-bold ml-1">
+                            (+ {item.tradeOfferQty} {item.unit} ফ্রি)
+                          </span>
+                        ) : null}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="font-extrabold text-neutral-900">৳{item.lineTotal.toLocaleString()}</span>
+                      <button
+                        onClick={() => handleQuantityChange(item.productId, -item.quantity)}
+                        className="p-1 text-neutral-400 hover:text-rose-600"
+                        title="রিমুভ"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Calculations & Discounts */}
+            {cartItems.length > 0 && (
+              <div className="border-t border-neutral-200 pt-3 space-y-2 text-xs">
+                {/* Subtotal */}
+                <div className="flex justify-between text-neutral-600">
+                  <span>সাবটোটাল:</span>
+                  <span className="font-bold text-neutral-900">৳{subTotal.toLocaleString()}</span>
+                </div>
+
+                {/* Cash Discount Selector */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-neutral-600">ক্যাশ ডিসকাউন্ট (%):</span>
+                  <div className="flex items-center gap-1">
+                    {[0, 2, 3, 5].map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => setDiscountPercent(pct)}
+                        className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                          discountPercent === pct
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                        }`}
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {discountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-semibold">
+                    <span>ডিসকাউন্ট ছাড়:</span>
+                    <span>-৳{discountAmount.toLocaleString()}</span>
+                  </div>
+                )}
+
+                {/* Net Total */}
+                <div className="flex justify-between text-sm font-extrabold text-neutral-900 bg-emerald-50/70 p-2 rounded-xl border border-emerald-200">
+                  <span>নিট প্রদেয় (Net Total):</span>
+                  <span className="text-emerald-800 text-base">৳{netTotal.toLocaleString()}</span>
+                </div>
+
+                {/* Next-Day Delivery Payment Info Notice */}
+                <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-[11px] text-amber-900 leading-relaxed">
+                  <span className="font-extrabold block text-amber-950">📦 ডেলিভারির সময় পেমেন্ট ও বাকি হিসাব:</span>
+                  <span>পরের দিন দোকানে মাল বুঝিয়ে দেওয়ার সময় <strong>"দৈনিক অর্ডার ও মেমো"</strong> থেকে নগদ টাকা বা বাকি এন্ট্রি করুন।</span>
+                </div>
+
+                {/* Financial Summary - Mot, Agrim, Baki */}
+                <div className="rounded-xl border border-neutral-300 overflow-hidden bg-white shadow-xs">
+                  <table className="w-full text-xs font-bold border-collapse">
+                    <tbody>
+                      <tr className="border-b border-neutral-200">
+                        <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 w-1/2 border-r border-neutral-200">
+                          মোট
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-emerald-800 text-sm">
+                          ৳{netTotal.toLocaleString()}
+                        </td>
+                      </tr>
+                      <tr className="border-b border-neutral-200">
+                        <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 border-r border-neutral-200">
+                          অগ্রিম
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-neutral-900 text-sm h-7"></td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 border-r border-neutral-200">
+                          বাঁকী
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-neutral-900 text-sm h-7"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Notes Input */}
+                <div>
+                  <input
+                    type="text"
+                    value={orderNotes}
+                    onChange={(e) => setOrderNotes(e.target.value)}
+                    placeholder="বিশেষ দ্রষ্টব্য / ডেলিভারি সময় (ঐচ্ছিক)"
+                    className="w-full text-[11px] p-2 border border-neutral-300 rounded-xl"
+                  />
+                </div>
+
+                {/* Confirm Button */}
+                <button
+                  id="btn-confirm-order"
+                  onClick={handleSubmitOrder}
+                  className={`w-full py-3 text-white rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 mt-2 cursor-pointer ${
+                    editingOrder
+                      ? 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800'
+                      : 'bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800'
+                  }`}
+                >
+                  <FileCheck className="w-4 h-4" />
+                  <span>
+                    {editingOrder
+                      ? `💾 মেমো #${editingOrder.memoNumber} আপডেট সংরক্ষণ করুন`
+                      : 'অর্ডার কনফার্ম ও মেমো তৈরি'}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Floating Sticky "কার্ড" Button */}
+      <div className="fixed bottom-20 md:bottom-6 right-4 z-40">
+        <button
+          id="floating-cart-view-btn"
+          type="button"
+          onClick={() => setIsCartDrawerOpen(true)}
+          className="flex items-center gap-2 px-4 py-3 bg-emerald-800 hover:bg-emerald-700 active:bg-emerald-900 text-white rounded-2xl shadow-2xl font-bold text-xs sm:text-sm border-2 border-emerald-400 hover:scale-105 active:scale-95 transition-all cursor-pointer"
+        >
+          <div className="relative">
+            <ShoppingBag className="w-5 h-5 text-emerald-200" />
+            {totalCartItemCount > 0 && (
+              <span className="absolute -top-2 -right-2 bg-rose-600 text-white text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center animate-bounce">
+                {totalCartItemCount}
+              </span>
+            )}
+          </div>
+          <span>অর্ডার কাটুন ({totalCartItemCount} টি)</span>
+          <span className="bg-emerald-950/90 text-emerald-200 px-2 py-0.5 rounded-lg text-xs font-mono font-bold">
+            ৳{netTotal.toLocaleString()}
+          </span>
+        </button>
+      </div>
+
+      {/* Cart Review & Checkout Slide-Over Modal / Drawer */}
+      {isCartDrawerOpen && (
+        <div className="fixed inset-0 z-50 bg-neutral-900/60 backdrop-blur-xs flex items-center justify-center sm:justify-end p-2 sm:p-0 animate-in fade-in">
+          <div className="bg-white w-full sm:max-w-md h-full sm:h-[96vh] sm:my-auto sm:mr-4 rounded-3xl shadow-2xl border border-neutral-200 flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+            {/* Drawer Header */}
+            <div className="p-4 bg-emerald-800 text-white flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2">
+                <ShoppingBag className="w-5 h-5 text-emerald-200" />
+                <div>
+                  <h3 className="font-bold text-base leading-tight">অর্ডার কার্ড</h3>
+                  <p className="text-[11px] text-emerald-200">
+                    {selectedShop ? selectedShop.name : 'দোকান সিলেক্ট করুন'} ({totalCartItemCount} টি পণ্য)
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCartDrawerOpen(false)}
+                className="p-1.5 rounded-xl bg-emerald-900/80 hover:bg-emerald-700 text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Drawer Body: Items & Billing */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+              {/* Items List */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between pb-1 border-b border-neutral-200 text-neutral-500 font-semibold">
+                  <span>কার্ডে যুক্ত পণ্যসমূহ</span>
+                  {cartItems.length > 0 && (
+                    <button
+                      onClick={handleClearCart}
+                      className="text-rose-600 hover:text-rose-700 text-[11px] flex items-center gap-1 font-medium cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>সব মুছুন</span>
+                    </button>
+                  )}
+                </div>
+
+                {cartItems.length === 0 ? (
+                  <div className="text-center py-8 text-neutral-400">
+                    <ShoppingBag className="w-10 h-10 mx-auto mb-2 opacity-30 text-neutral-400" />
+                    <p className="font-bold text-neutral-600">আপনার কার্ড খালি</p>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">পণ্য তালিকা থেকে "+ কার্ডে যোগ" করুন</p>
+                  </div>
+                ) : (
+                  cartItems.map((item) => (
+                    <div
+                      key={item.productId}
+                      className="p-3 bg-neutral-50 rounded-2xl border border-neutral-200 space-y-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-neutral-900 truncate">{item.productName}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <select
+                              value={item.unit}
+                              onChange={(e) => handleUnitChange(item.productId, e.target.value)}
+                              className="text-[10px] font-bold bg-white text-neutral-800 px-1.5 py-0.5 rounded border border-neutral-300 focus:outline-hidden cursor-pointer"
+                              title="একক পরিবর্তন"
+                            >
+                              {(() => {
+                                const matchedProd = products.find((p) => p.id === item.productId);
+                                const available = matchedProd ? getAvailableUnitsForProduct(matchedProd) : [item.unit, 'পিস', 'ডজন'];
+                                return available.map((u) => (
+                                  <option key={u} value={u}>
+                                    {u} {matchedProd ? `(৳${getDefaultPriceForUnit(matchedProd, u)})` : ''}
+                                  </option>
+                                ));
+                              })()}
+                            </select>
+                            <span className="text-[10px] bg-emerald-50 text-emerald-800 px-1.5 py-0.5 rounded border border-emerald-200 font-bold">
+                              দর: ৳{item.unitPrice}/{item.unit}
+                            </span>
+                            {item.tradeOfferQty ? (
+                              <span className="text-[10px] text-emerald-700 font-bold flex items-center gap-0.5">
+                                <Tag className="w-2.5 h-2.5" />
+                                +{item.tradeOfferQty} {item.unit} ফ্রি
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleQuantityChange(item.productId, -item.quantity)}
+                          className="p-1 text-neutral-400 hover:text-rose-600 transition-colors"
+                          title="রিমুভ"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-neutral-100">
+                        {/* Price Edit (User requested: "অর্ডার কাটার সময় দামকোয়ান্টিটি ইডিট করা যাবে") */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-neutral-500 block">একক দর (৳):</label>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={(e) => handleUpdatePrice(item.productId, e.target.value)}
+                              className="w-16 p-1 text-xs font-black text-emerald-800 bg-white border border-neutral-300 rounded-lg focus:ring-1 focus:ring-emerald-500"
+                            />
+                            <span className="text-[10px] text-neutral-400">/ {item.unit}</span>
+                          </div>
+                        </div>
+
+                        {/* Quantity Edit */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] font-bold text-neutral-500 block">পরিমাণ ({item.unit}):</label>
+                          <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-neutral-300">
+                            <button
+                              onClick={() => handleQuantityChange(item.productId, -1)}
+                              className="w-7 h-7 rounded-lg bg-neutral-100 flex items-center justify-center text-neutral-700 hover:bg-rose-50 hover:text-rose-600 font-bold"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <input
+                              type="number"
+                              value={item.quantity}
+                              onChange={(e) => handleSetExactQuantity(item.productId, e.target.value)}
+                              className="w-8 text-center font-bold text-xs bg-transparent focus:outline-hidden"
+                            />
+                            <button
+                              onClick={() => handleQuantityChange(item.productId, 1)}
+                              className="w-7 h-7 rounded-lg bg-neutral-100 flex items-center justify-center text-neutral-700 hover:bg-emerald-50 hover:text-emerald-700 font-bold"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="ml-auto text-right">
+                          <label className="text-[10px] font-bold text-neutral-500 block">মোট:</label>
+                          <span className="font-extrabold text-neutral-900 text-sm font-mono">
+                            ৳{item.lineTotal.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Discount & Payment Controls if items exist */}
+              {cartItems.length > 0 && (
+                <div className="space-y-3 pt-2 border-t border-neutral-200">
+                  {/* Discount buttons */}
+                  <div>
+                    <span className="font-bold text-neutral-700 block mb-1.5">নগদ ডিসকাউন্ট:</span>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[0, 2, 3, 5].map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setDiscountPercent(d)}
+                          className={`py-1.5 rounded-xl font-bold border transition-colors cursor-pointer ${
+                            discountPercent === d
+                              ? 'bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-neutral-100 text-neutral-700 border-neutral-200 hover:bg-neutral-200'
+                          }`}
+                        >
+                          {d === 0 ? 'নাই' : `${d}% ছাড়`}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Next-Day Delivery Payment Info Notice */}
+                  <div className="p-2.5 bg-amber-50/90 border border-amber-200 rounded-xl text-[11px] text-amber-900 leading-relaxed">
+                    <span className="font-extrabold block text-amber-950">📦 ডেলিভারির সময় পেমেন্ট ও বাকি হিসাব:</span>
+                    <span>পরের দিন দোকানে মাল বুঝিয়ে দেওয়ার সময় <strong>"দৈনিক অর্ডার ও মেমো"</strong> থেকে নগদ টাকা বা বাকি এন্ট্রি করুন।</span>
+                  </div>
+
+                  {/* Calculations - Mot, Agrim, Baki structure */}
+                  <div className="rounded-2xl border border-neutral-300 overflow-hidden bg-white shadow-xs">
+                    <table className="w-full text-xs font-bold border-collapse">
+                      <tbody>
+                        <tr className="border-b border-neutral-200">
+                          <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 w-1/2 border-r border-neutral-200">
+                            মোট
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-emerald-800 text-sm">
+                            ৳{netTotal.toLocaleString()}
+                          </td>
+                        </tr>
+                        <tr className="border-b border-neutral-200">
+                          <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 border-r border-neutral-200">
+                            অগ্রিম
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-neutral-900 text-sm h-8"></td>
+                        </tr>
+                        <tr>
+                          <td className="px-3 py-2 bg-neutral-100/80 text-neutral-800 border-r border-neutral-200">
+                            বাঁকী
+                          </td>
+                          <td className="px-3 py-2 text-right font-mono text-neutral-900 text-sm h-8"></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Order Notes */}
+                  <div>
+                    <label className="font-bold text-neutral-700 block mb-1">অর্ডার নোট / মন্তব্য:</label>
+                    <input
+                      type="text"
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      placeholder="জরুরি ডেলিভারি বা মন্তব্য..."
+                      className="w-full p-2 border border-neutral-300 rounded-xl"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Drawer Footer: Confirm Button */}
+            {cartItems.length > 0 && (
+              <div className="p-4 bg-white border-t border-neutral-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleSubmitOrder();
+                    setIsCartDrawerOpen(false);
+                  }}
+                  className={`w-full py-3 text-white rounded-2xl font-black text-sm shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    editingOrder
+                      ? 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800'
+                      : 'bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800'
+                  }`}
+                >
+                  <FileCheck className="w-5 h-5" />
+                  <span>
+                    {editingOrder
+                      ? `💾 মেমো #${editingOrder.memoNumber} আপডেট সংরক্ষণ করুন (৳${netTotal.toLocaleString()})`
+                      : `অর্ডার কনফার্ম ও মেমো তৈরি (৳${netTotal.toLocaleString()})`}
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add New Shop Modal with Map Location & Route Name */}
+      <AddShopModal
+        isOpen={isAddShopModalOpen}
+        onClose={() => setIsAddShopModalOpen(false)}
+        onSaveShop={(newShop) => {
+          onAddShop(newShop);
+          setShopSearch('');
+          if (routeFilter !== 'all' && routeFilter !== newShop.routeArea) {
+            setRouteFilter('all');
+          }
+          setSelectedShopId(newShop.id);
+        }}
+        existingShops={shops}
+        routes={routes}
+        initialRoute={routeFilter !== 'all' ? routeFilter : undefined}
+      />
+
+      {/* Fullscreen Product Image Lightbox Modal for SR, DSR, Admin */}
+      <ProductImageLightboxModal
+        isOpen={!!lightboxProduct}
+        product={lightboxProduct}
+        onClose={() => setLightboxProduct(null)}
+        onAddToCart={(qty) => {
+          if (lightboxProduct) {
+            const currentQty = cart[lightboxProduct.id]?.quantity || 0;
+            handleQuantityChange(lightboxProduct.id, qty - currentQty);
+          }
+        }}
+        cartQty={lightboxProduct ? cart[lightboxProduct.id]?.quantity || 0 : 0}
+      />
+    </div>
+  );
+};

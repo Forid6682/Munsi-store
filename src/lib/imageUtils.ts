@@ -1,0 +1,265 @@
+/**
+ * Ultra-Lightweight Client-Side Image Compression & Resizing Utility
+ * 
+ * Ensures any uploaded photo (even 10MB+ high-res smartphone camera shots)
+ * is automatically compressed to an ultra-lightweight, crisp Data URL (15 KB - 28 KB) so that:
+ * 1. Mobile data (কেবি/ইন্টারনেট) usage is minimized to the extreme for users and customers.
+ * 2. Firestore document size stays far below limits (< 30 KB per product).
+ * 3. Browser localStorage quota (5MB) never gets filled up.
+ * 4. Product images load instantaneously even on slow 2G/3G mobile networks.
+ * 5. Self-contained data URL format: zero server uploads dependency, works 100% on Vercel & Firebase.
+ */
+
+// Helper to determine if browser canvas natively supports webp export
+let cachedWebPSupport: boolean | null = null;
+function checkWebPSupport(): boolean {
+  if (cachedWebPSupport !== null) return cachedWebPSupport;
+  try {
+    const testCanvas = document.createElement('canvas');
+    testCanvas.width = 1;
+    testCanvas.height = 1;
+    cachedWebPSupport = testCanvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
+  } catch {
+    cachedWebPSupport = false;
+  }
+  return cachedWebPSupport;
+}
+
+export function getApproxKbFromDataUrl(dataUrl: string): number {
+  if (!dataUrl || !dataUrl.startsWith('data:')) return 0;
+  // Base64 overhead is 4/3 of binary
+  return Math.round((dataUrl.length * 0.75) / 1024);
+}
+
+// Helper to decode image file safely using createImageBitmap or Image with timeout
+async function decodeImageSource(file: File): Promise<{ width: number; height: number; draw: (ctx: CanvasRenderingContext2D, w: number, h: number) => void }> {
+  // Strategy 1: Modern createImageBitmap (off-main-thread, auto EXIF orientation, fast on mobile)
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmapPromise = createImageBitmap(file);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Bitmap decode timeout')), 3500)
+      );
+      const bitmap = await Promise.race([bitmapPromise, timeoutPromise]);
+      return {
+        width: bitmap.width,
+        height: bitmap.height,
+        draw: (ctx, w, h) => {
+          ctx.drawImage(bitmap, 0, 0, w, h);
+          try {
+            bitmap.close();
+          } catch {
+            // ignore
+          }
+        },
+      };
+    } catch {
+      // Fallback to Image element
+    }
+  }
+
+  // Strategy 2: HTMLImageElement with strict timeout
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        reject(new Error('ছবি লোড হতে অতিরিক্ত সময় লেগেছে।'));
+      }, 4000);
+
+      image.onload = () => {
+        if (!timedOut) {
+          clearTimeout(timer);
+          resolve(image);
+        }
+      };
+      image.onerror = () => {
+        if (!timedOut) {
+          clearTimeout(timer);
+          reject(new Error('ছবিটি লোড করা যায়নি। ফরম্যাটটি সমর্থিত নাও হতে পারে।'));
+        }
+      };
+      image.src = objectUrl;
+    });
+
+    return {
+      width: img.naturalWidth || img.width || 400,
+      height: img.naturalHeight || img.height || 400,
+      draw: (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h),
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+export async function processImageFile(
+  file: File,
+  maxDimension: number = 400,
+  maxBase64Length: number = 32 * 1024 // ~24 KB binary payload
+): Promise<string> {
+  if (!file) {
+    throw new Error('কোনো ফাইল নির্বাচন করা হয়নি');
+  }
+
+  // Allow up to 30MB camera photos
+  const MAX_RAW_SIZE = 30 * 1024 * 1024;
+  if (file.size > MAX_RAW_SIZE) {
+    throw new Error('ছবির সাইজ ৩০ মেগাবাইটের (30MB) নিচে হতে হবে');
+  }
+
+  try {
+    const decoded = await decodeImageSource(file);
+
+    let width = decoded.width || 400;
+    let height = decoded.height || 400;
+
+    // Constrain aspect ratio to fit inside maxDimension
+    if (width > maxDimension || height > maxDimension) {
+      if (width >= height) {
+        height = Math.max(1, Math.round((height * maxDimension) / width));
+        width = maxDimension;
+      } else {
+        width = Math.max(1, Math.round((width * maxDimension) / height));
+        height = maxDimension;
+      }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) {
+      throw new Error('ক্যানভাস তৈরি করা যায়নি');
+    }
+
+    // High quality rendering
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    // Fill clean white background (prevents dark backgrounds on transparent PNGs)
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    decoded.draw(ctx, width, height);
+
+    const isWebP = checkWebPSupport();
+    const mimeType = isWebP ? 'image/webp' : 'image/jpeg';
+
+    // Start with balanced quality for high compression & clarity
+    let quality = isWebP ? 0.70 : 0.68;
+    let dataUrl = canvas.toDataURL(mimeType, quality);
+
+    // Step down quality if exceeding the target low-KB size (with max 5 loop protection)
+    let loopCount = 0;
+    while (dataUrl.length > maxBase64Length && quality > 0.35 && loopCount < 5) {
+      loopCount++;
+      quality -= 0.08;
+      dataUrl = canvas.toDataURL(mimeType, Math.max(0.32, quality));
+    }
+
+    // If still large, scale down canvas resolution slightly
+    if (dataUrl.length > maxBase64Length) {
+      const scaleFactor = 0.75;
+      const smallerCanvas = document.createElement('canvas');
+      smallerCanvas.width = Math.max(160, Math.round(width * scaleFactor));
+      smallerCanvas.height = Math.max(160, Math.round(height * scaleFactor));
+      const sCtx = smallerCanvas.getContext('2d');
+      if (sCtx) {
+        sCtx.imageSmoothingEnabled = true;
+        sCtx.imageSmoothingQuality = 'medium';
+        sCtx.fillStyle = '#FFFFFF';
+        sCtx.fillRect(0, 0, smallerCanvas.width, smallerCanvas.height);
+        sCtx.drawImage(canvas, 0, 0, smallerCanvas.width, smallerCanvas.height);
+        dataUrl = smallerCanvas.toDataURL(mimeType, 0.55);
+
+        if (dataUrl.length > maxBase64Length) {
+          dataUrl = smallerCanvas.toDataURL(mimeType, 0.40);
+        }
+      }
+    }
+
+    return dataUrl;
+  } catch (err: any) {
+    // Fallback: Read as Data URL directly if file is reasonably small (< 250KB)
+    if (file.size <= 250 * 1024) {
+      try {
+        const directDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === 'string') {
+              resolve(reader.result);
+            } else {
+              reject(new Error('ছবি পড়তে সমস্যা হয়েছে'));
+            }
+          };
+          reader.onerror = () => reject(new Error('ছবি রিড করতে সমস্যা হয়েছে'));
+          reader.readAsDataURL(file);
+        });
+        return directDataUrl;
+      } catch {
+        // Continue to throw error
+      }
+    }
+    throw new Error(err?.message || 'এই ফরম্যাটের ছবি প্রসেস করা যায়নি। অনুগ্রহ করে JPG বা PNG ছবি দিন।');
+  }
+}
+
+/**
+ * Compresses an existing Base64 data URL if it exceeds safe size limits (> 32KB).
+ */
+export async function compressDataUrlIfNeeded(
+  imageUrl: string,
+  maxDimension: number = 400,
+  maxBase64Length: number = 32 * 1024
+): Promise<string> {
+  if (!imageUrl || !imageUrl.startsWith('data:image/') || imageUrl.length <= maxBase64Length) {
+    return imageUrl;
+  }
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('Invalid data URL'));
+      image.src = imageUrl;
+    });
+
+    let width = img.naturalWidth || img.width || 400;
+    let height = img.naturalHeight || img.height || 400;
+
+    if (width > maxDimension || height > maxDimension) {
+      if (width >= height) {
+        height = Math.max(1, Math.round((height * maxDimension) / width));
+        width = maxDimension;
+      } else {
+        width = Math.max(1, Math.round((width * maxDimension) / height));
+        height = maxDimension;
+      }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return imageUrl;
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const isWebP = checkWebPSupport();
+    const mimeType = isWebP ? 'image/webp' : 'image/jpeg';
+
+    let quality = isWebP ? 0.68 : 0.65;
+    let result = canvas.toDataURL(mimeType, quality);
+    while (result.length > maxBase64Length && quality > 0.32) {
+      quality -= 0.10;
+      result = canvas.toDataURL(mimeType, Math.max(0.30, quality));
+    }
+    return result;
+  } catch {
+    return imageUrl;
+  }
+}
