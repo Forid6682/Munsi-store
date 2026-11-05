@@ -2574,7 +2574,7 @@ export default function App() {
             dailyExpenses: finalDailyExpenses,
           });
           for (const p of finalProducts) {
-            if (p.id && p.imageUrl && p.imageUrl.startsWith('data:')) {
+            if (p.id && p.imageUrl) {
               saveProductImageToIndexedDB(p.id, p.imageUrl).catch(() => {});
             }
           }

@@ -874,9 +874,17 @@ export async function initializeStorageFromIndexedDB(): Promise<{
       } catch {}
     }
 
-    // Attach high-res images from IndexedDB
+    // Attach offline blob images from IndexedDB
     if (idbImages && Object.keys(idbImages).length > 0) {
-      prods = prods.map((p) => (!p.imageUrl && idbImages[p.id] ? { ...p, imageUrl: idbImages[p.id] } : p));
+      prods = prods.map((p) => {
+        const offlineUrl = idbImages[p.id];
+        if (!offlineUrl) return p;
+        return {
+          ...p,
+          imageUrl: (!p.imageUrl || (typeof navigator !== 'undefined' && !navigator.onLine)) ? offlineUrl : p.imageUrl,
+          _offlineBlobUrl: offlineUrl,
+        };
+      });
     }
 
     // Filter deleted tombstones
@@ -977,7 +985,7 @@ export function saveProducts(products: Product[]) {
   if (isIndexedDBSupported()) {
     saveItemsToIndexedDB('products', clean).catch(() => {});
     clean.forEach((p) => {
-      if (p.imageUrl && p.imageUrl.startsWith('data:image/')) {
+      if (p.imageUrl) {
         saveProductImageToIndexedDB(p.id, p.imageUrl).catch(() => {});
       }
     });
