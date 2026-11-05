@@ -1289,14 +1289,19 @@ export function deleteShop(shopId: string) {
   }
 }
 
-export function updateShopDue(shopId: string, dueDelta: number) {
+export function updateShopDue(shopId: string, dueDelta: number): Shop | null {
   const shops = getShops();
   const shop = shops.find((s) => s.id === shopId);
   if (shop) {
-    shop.previousDue = Math.max(0, shop.previousDue + dueDelta);
+    const currentDue = Number(shop.previousDue) || 0;
+    shop.previousDue = Math.max(0, currentDue + dueDelta);
     shop.lastVisitDate = new Date().toISOString().split('T')[0];
+    shop.updatedAt = new Date().toISOString();
+    (shop as any)._isOfflinePending = true;
     saveShops(shops);
+    return shop;
   }
+  return null;
 }
 
 export function getOrders(): Order[] {
@@ -1696,18 +1701,22 @@ export function deleteAllDueCollectionsLocal(): string[] {
 }
 
 export function resetAllShopDuesLocal(): Shop[] {
+  const nowIso = new Date().toISOString();
   const shops = getShops().map((s) => ({
     ...s,
     previousDue: 0,
+    updatedAt: nowIso,
+    _isOfflinePending: true,
   }));
   saveShops(shops);
   return shops;
 }
 
 export function resetShopDueLocal(shopId: string): Shop[] {
+  const nowIso = new Date().toISOString();
   const shops = getShops().map((s) => {
     if (s.id === shopId) {
-      return { ...s, previousDue: 0 };
+      return { ...s, previousDue: 0, updatedAt: nowIso, _isOfflinePending: true };
     }
     return s;
   });
@@ -1717,9 +1726,10 @@ export function resetShopDueLocal(shopId: string): Shop[] {
 
 export function resetBatchShopDuesLocal(shopIds: string[]): Shop[] {
   const idSet = new Set(shopIds);
+  const nowIso = new Date().toISOString();
   const shops = getShops().map((s) => {
     if (idSet.has(s.id)) {
-      return { ...s, previousDue: 0 };
+      return { ...s, previousDue: 0, updatedAt: nowIso, _isOfflinePending: true };
     }
     return s;
   });
